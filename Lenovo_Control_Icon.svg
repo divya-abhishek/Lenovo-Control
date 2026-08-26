@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Legion Control">
+  <title>Legion Control</title>
+
+  <defs>
+    <linearGradient id="hex" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0"   stop-color="#FF6377"/>
+      <stop offset="0.5" stop-color="#E63950"/>
+      <stop offset="1"   stop-color="#B81E38"/>
+    </linearGradient>
+
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.45"/>
+      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.28"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Flat-top hexagon badge -->
+  <g>
+    <path d="M128 14 L226 70 L226 186 L128 242 L30 186 L30 70 Z" fill="url(#hex)"/>
+    <path d="M128 14 L226 70 L226 186 L128 242 L30 186 L30 70 Z" fill="url(#edge)"/>
+    <path d="M128 14 L226 70 L226 186 L128 242 L30 186 L30 70 Z"
+          fill="none" stroke="#7E1226" stroke-width="4" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Upward double chevron: performance / boost -->
+  <g fill="#FFFFFF">
+    <path d="M128 62 L196 122 L166 122 L128 89 L90 122 L60 122 Z"/>
+    <path d="M128 122 L196 182 L166 182 L128 149 L90 182 L60 182 Z" fill-opacity="0.72"/>
+  </g>
+</svg>
