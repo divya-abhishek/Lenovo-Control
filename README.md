@@ -1,5 +1,5 @@
 # Lenovo Control
-
+<img src='https://i.postimg.cc/yxrmfngJ/New-Project.jpg'/>
 A small always-on-top widget for Lenovo Legion and IdeaPad laptops: charging
 mode, keyboard lighting and Fn Lock, with a live battery gauge in the system
 tray.
