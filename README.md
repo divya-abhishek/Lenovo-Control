@@ -7,8 +7,6 @@ tray.
 It talks to the hardware directly. **No Lenovo Vantage, no Legion Toolkit, no
 background service required.**
 
-Made by Divya Abhishek.
-
 ---
 
 ## Files
