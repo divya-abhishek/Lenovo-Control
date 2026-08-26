@@ -18,7 +18,7 @@ background service required.**
 | `Build_Lenovo_Control_Exe.bat` | One-time: compiles the .ps1 into `Lenovo_Control.exe`. |
 | `Startup_Setup.bat` | Optional: enable/disable "start at logon" from outside the app. |
 | `Lenovo_Control_Icon.ico` | App icon, embedded into the .exe by the build script. |
-| `Lenovo_Control_Icon.svg` | Vector source for the icon. |
+| `Lenovo_Control.exe` | .exe build of the app - download this to test. |
 
 ---
 
