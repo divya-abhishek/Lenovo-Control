@@ -1209,6 +1209,12 @@ function Set-BatteryMode {
     # rather than leaving stale wording until the next timer tick.
     Update-BatteryReadout
 
+    # Persist immediately, not just on app exit. A reboot or shutdown kills this
+    # process before $app.Add_Exit gets a chance to run, so relying on exit-time
+    # saving meant the "last mode" on disk was often still the install-time
+    # default and got re-applied (wrongly) on every subsequent boot.
+    Save-Preferences
+
     if ($after -eq $TargetMode) {
         Set-Status -Ok
         return
@@ -1383,6 +1389,7 @@ function Set-WhiteBacklight {
         if ((Get-WhiteBacklight) -eq $Level) { break }
     }
     Update-WhiteUi
+    Save-Preferences
 }
 
 function Update-WhiteUi {
@@ -1433,6 +1440,7 @@ function Send-ZoneState {
         $ctrl['TxtLightNow'].Text = switch ($script:ZoneEffect) {
             1 { 'STATIC' } 3 { 'BREATH' } 4 { 'WAVE' } 6 { 'SMOOTH' } default { '' }
         }
+        Save-Preferences
     } else {
         $script:LightHandle = [IntPtr]::Zero
         $ctrl['TxtLightNow'].Text = 'write rejected'
@@ -1508,6 +1516,7 @@ function Set-SpectrumBrightness {
     $lvl = [Math]::Max(0, [Math]::Min(9, $Level))
     Send-SpectrumReport -Op 0xCE -Payload @([byte]$lvl) | Out-Null
     $ctrl['TxtSpecBright'].Text = "$lvl / 9"
+    Save-Preferences
 }
 
 function Send-SpectrumEffect {
@@ -1554,6 +1563,7 @@ function Send-SpectrumEffect {
         $ctrl['TxtLightNow'].Text = switch ($EffectType) {
             11 { 'STATIC' } 2 { 'RAINBOW' } 4 { 'PULSE' } 6 { 'SMOOTH' } default { '' }
         }
+        Save-Preferences
     } else {
         $ctrl['TxtLightNow'].Text = 'write rejected'
         Set-Status 'lighting blocked - close Lenovo Vantage'
