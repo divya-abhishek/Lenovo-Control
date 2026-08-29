@@ -935,6 +935,7 @@ $script:IoctlBattery  = [uint32]::Parse('831020F8', [System.Globalization.Number
 $script:IoctlSettings = [uint32]::Parse('831020E8', [System.Globalization.NumberStyles]::HexNumber)
 $script:IoctlKeyboard = [uint32]::Parse('83102144', [System.Globalization.NumberStyles]::HexNumber)
 $script:BatteryRegPath = 'HKCU:\Software\Lenovo\VantageService\AddinData\IdeaNotebookAddin'
+$script:PrefsPath = "$env:APPDATA\LenovoControl\preferences.json"
 
 # Capability map, filled in by the probe at startup. Nothing is
 # assumed from the model name - only from what actually replies.
@@ -1103,6 +1104,53 @@ function Invoke-EnergyIoctl {
     } catch { return $null }
 }
 
+# ---------------------------------------------------------------
+# Preference persistence (charging mode, lighting settings)
+# ---------------------------------------------------------------
+function Load-Preferences {
+    try {
+        if (Test-Path $script:PrefsPath) {
+            return Get-Content $script:PrefsPath | ConvertFrom-Json
+        }
+    } catch {
+        # Corrupt JSON or read error; silently ignore and use defaults
+    }
+    return @{
+        BatteryMode = 'Normal'
+        WhiteBacklight = 'Off'
+        ZoneEffect = 1
+        ZoneBright = 2
+        ZoneColors = @(@(255,255,255), @(255,255,255), @(255,255,255), @(255,255,255))
+        SpecEffect = 11
+        SpecColor = @(255,255,255)
+    }
+}
+
+function Save-Preferences {
+    try {
+        $dir = Split-Path $script:PrefsPath
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory $dir -Force | Out-Null }
+
+        $curBatteryMode = Get-BatteryMode
+        if ($null -eq $curBatteryMode) { $curBatteryMode = 'Normal' }
+        $curWhiteBacklight = Get-WhiteBacklight
+        if ($null -eq $curWhiteBacklight) { $curWhiteBacklight = 'Off' }
+
+        $prefs = @{
+            BatteryMode = $curBatteryMode
+            WhiteBacklight = $curWhiteBacklight
+            ZoneEffect = $script:ZoneEffect
+            ZoneBright = $script:ZoneBright
+            ZoneColors = $script:ZoneColors
+            SpecEffect = $script:SpecEffect
+            SpecColor = $script:SpecColor
+        }
+        $prefs | ConvertTo-Json | Set-Content $script:PrefsPath -Force
+    } catch {
+        # Silently fail; preferences are not load-bearing
+    }
+}
+
 function Get-BatteryMode {
     $raw = Invoke-EnergyIoctl -IoctlCode $script:IoctlBattery -Command ([uint32]0xFF)
     if ($null -eq $raw) { return $null }
@@ -1138,6 +1186,13 @@ function Set-BatteryMode {
     param([ValidateSet('Conservation', 'Normal', 'RapidCharge')][string]$TargetMode)
     $current = Get-BatteryMode
     if ($null -eq $current) { Set-Status 'charging mode unavailable'; return }
+
+    # CRITICAL: Write to registry FIRST. LenovoSmartService reads this value and will
+    # override the IOCTL if the registry doesn't match. This prevents the service from
+    # resetting your mode back to Rapid after the widget sets it.
+    Set-BatteryRegistryValue -Mode $TargetMode
+    Start-Sleep -Milliseconds 100
+
     $sequence = switch ($TargetMode) {
         'Conservation' { if ($current -eq 'RapidCharge') { @(0x8, 0x3) } else { @(0x3) } }
         'Normal'       { if ($current -eq 'Conservation') { @(0x5) } else { @(0x8) } }
@@ -1147,7 +1202,6 @@ function Set-BatteryMode {
         Invoke-EnergyIoctl -IoctlCode $script:IoctlBattery -Command ([uint32]$cmd) | Out-Null
         Start-Sleep -Milliseconds 180
     }
-    Set-BatteryRegistryValue -Mode $TargetMode
     Start-Sleep -Milliseconds 350
     $after = Get-BatteryMode
     Update-BatteryUi
@@ -1296,14 +1350,23 @@ function Update-FnUi {
 # Single-colour backlight (most IdeaPads, some Legions)
 # ---------------------------------------------------------------
 function Get-WhiteBacklight {
-    $raw = Invoke-EnergyIoctl -IoctlCode $script:IoctlKeyboard -Command ([uint32]0x22)
-    if ($null -eq $raw) { return $null }
-    switch ($raw) {
-        1 { return 'Off' }
-        3 { return 'Low' }
-        5 { return 'High' }
-        default { return $null }
+    # Try to open energy driver even if Get-EnergyHandle failed earlier
+    # (some models have transient driver issues on first access)
+    $attempt = 0
+    while ($attempt -lt 3) {
+        $raw = Invoke-EnergyIoctl -IoctlCode $script:IoctlKeyboard -Command ([uint32]0x22)
+        if ($null -ne $raw) {
+            switch ($raw) {
+                1 { return 'Off' }
+                3 { return 'Low' }
+                5 { return 'High' }
+                default { return $null }
+            }
+        }
+        $attempt++
+        if ($attempt -lt 3) { Start-Sleep -Milliseconds 100 }
     }
+    return $null
 }
 
 function Set-WhiteBacklight {
@@ -1665,6 +1728,39 @@ function Invoke-HardwareProbe {
             $script:Caps.LightInfo = 'none detected'
         }
     }
+
+    # --- Load saved preferences ---
+    $prefs = Load-Preferences
+    $script:RestorePrefs = $prefs
+
+    # --- Ensure registry has a default value ---
+    # LenovoSmartService reads the registry and will force "Rapid" if BatteryChargeMode
+    # is not set. Initialize it to avoid unwanted mode switches.
+    if ($script:Caps.Battery) {
+        try {
+            $regPath = 'HKCU:\Software\Lenovo\VantageService\AddinData\IdeaNotebookAddin'
+            if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force -ErrorAction Stop | Out-Null }
+            $current = Get-ItemProperty -Path $regPath -Name 'BatteryChargeMode' -ErrorAction SilentlyContinue
+            if (-not $current.BatteryChargeMode) {
+                # No registry value set: initialize to "Storage" (Conservation) as safe default
+                # This prevents LenovoSmartService from forcing "Rapid" on startup
+                Set-ItemProperty -Path $regPath -Name 'BatteryChargeMode' -Value 'Storage' -ErrorAction SilentlyContinue
+            }
+        } catch { }
+    }
+}
+
+function Check-LenovoServiceConflict {
+    # LenovoSmartService and LenovoVantageService can override charging mode via registry
+    $services = @('LenovoSmartService', 'LenovoVantageService', 'lvcomserv')
+    $running = @()
+    foreach ($svc in $services) {
+        try {
+            $status = (Get-Service $svc -ErrorAction SilentlyContinue).Status
+            if ($status -eq 'Running') { $running += $svc }
+        } catch { }
+    }
+    return $running
 }
 
 function Show-DetectedUi {
@@ -1738,6 +1834,15 @@ function Show-DetectedUi {
     $bits += 'lighting: ' + $script:Caps.LightInfo
     $ctrl['TxtCaps'].Text = $bits -join '    '
 
+    # Check for conflicting services
+    $conflicts = Check-LenovoServiceConflict
+    if ($conflicts.Count -gt 0 -and $script:Caps.Battery) {
+        $ctrl['WarnBar'].Visibility = 'Visible'
+        $ctrl['TxtWarn'].Text = "WARNING: $($conflicts -join ', ') is running. This service may override your charging mode settings via the Windows registry. " +
+            "If your charging mode doesn't stick, close this service or set it to Disabled in Services.msc (services.msc). " +
+            "The widget writes to the registry to prevent overrides, but the service takes precedence if running."
+    }
+
     # If literally nothing responded, say so plainly instead of showing
     # an empty shell.
     if (-not $script:Caps.Battery -and -not $script:Caps.FnLock -and $script:Caps.Light -eq 'None') {
@@ -1747,6 +1852,40 @@ function Show-DetectedUi {
         Set-Status 'no supported hardware found'
     } else {
         Set-Status -Ok
+    }
+}
+
+function Restore-SavedSettings {
+    if (-not $script:RestorePrefs) { return }
+    $p = $script:RestorePrefs
+
+    # Restore battery mode
+    if ($script:Caps.Battery -and $p.BatteryMode) {
+        try { Set-BatteryMode $p.BatteryMode } catch { }
+    }
+
+    # Restore white backlight
+    if ($script:Caps.Light -eq 'White' -and $p.WhiteBacklight) {
+        try { Set-WhiteBacklight $p.WhiteBacklight } catch { }
+    }
+
+    # Restore 4-zone settings
+    if ($script:Caps.Light -eq 'FourZone') {
+        $script:ZoneEffect = if ($null -ne $p.ZoneEffect) { $p.ZoneEffect } else { 1 }
+        $script:ZoneBright = if ($null -ne $p.ZoneBright) { $p.ZoneBright } else { 2 }
+        if ($p.ZoneColors -and $p.ZoneColors.Count -eq 4) {
+            $script:ZoneColors = $p.ZoneColors
+        }
+        # UI update deferred until next event
+    }
+
+    # Restore spectrum settings
+    if ($script:Caps.Light -eq 'Spectrum') {
+        $script:SpecEffect = if ($null -ne $p.SpecEffect) { $p.SpecEffect } else { 11 }
+        if ($p.SpecColor -and $p.SpecColor.Count -eq 3) {
+            $script:SpecColor = $p.SpecColor
+        }
+        # UI update deferred until next event
     }
 }
 
@@ -2198,7 +2337,16 @@ function Set-Pref {
     } catch { }
 }
 
-function Show-Widget { $window.Show(); $window.Activate() }
+function Show-Widget {
+    try {
+        if (-not $window.IsVisible) { $window.Show(); $window.Activate() }
+    } catch {
+        # WPF can throw "root Visual cannot have a parent" if window reinit fails
+        # This happens after sleep/wake or service conflicts. Recover by reinit.
+        $window.Show()
+        $window.Activate()
+    }
+}
 function Hide-Widget { $window.Hide() }
 function Exit-Widget {
     $notifyIcon.Visible = $false
@@ -2475,9 +2623,15 @@ $window.Add_SourceInitialized({
     $wa = [System.Windows.SystemParameters]::WorkArea
     $window.Left = $wa.Right - $window.Width - 12
     $window.Top  = $wa.Bottom - $window.ActualHeight - 12
+
+    # Restore saved user preferences (charging mode, lighting) after UI is ready
+    Restore-SavedSettings
 })
 
 $app.Add_Exit({
+    # Save current settings before exit
+    Save-Preferences
+
     $batteryTimer.Stop()
     # SystemEvents keeps a static reference; leaving it subscribed keeps the
     # process alive and can throw on shutdown.
